@@ -84,6 +84,7 @@ COMMON_URLS = (
 )
 
 POLICY = config_get('policy', 'permission')
+MULTI_VO = config_get('common', 'multi_vo', default=False)
 
 ATLAS_URLS = ()
 OTHER_URLS = ()
@@ -191,7 +192,7 @@ class Auth(object):
                 raise generate_http_error(401, 'CannotAuthenticate', 'Cannot get token')
         else:
             render = template.render(join(dirname(__file__), 'templates/'))
-            return render.select_login_method(AUTH_ISSUERS, SAML_SUPPORT)
+            return render.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, MULTI_VO)
 
 
 class X509(object):
@@ -354,7 +355,11 @@ class Login(object):
             account = data.account
         else:
             account = None
-        return render.login(account)
+        if hasattr(data, 'vo') and data.vo:
+            vo = data.vo
+        else:
+            vo = None
+        return render.login(account, vo, MULTI_VO)
 
     def POST(self):
         """ POST """

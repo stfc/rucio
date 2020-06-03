@@ -1,4 +1,4 @@
-$def with (account)
+$def with (account, vo, multi_vo)
 <!--
  Copyright European Organization for Nuclear Research (CERN)
 
@@ -90,6 +90,20 @@ $def with (account)
               </label>
             </div>
           </div>
+          $if multi_vo and not vo:
+              <div class="row">
+                <div class="large-6 columns center">
+                  <label>Rucio VO (3 letter name)
+                    <input type="vo" name="vo" placeholder="VO ..." id="vo"/ >
+                  </label>
+                </div>
+              </div>
+          $elif multi_vo:
+            <div class="row">
+              <div class="large-6 columns center">
+                <label>Rucio VO: $vo</label>
+              </div>
+            </div>
           $if not account:
               <div class="row">
                 <div class="large-6 columns center">
@@ -98,6 +112,12 @@ $def with (account)
                   </label>
                 </div>
               </div>
+          $else:
+            <div class="row">
+              <div class="large-6 columns center">
+                <label>Rucio account name: $account</label>
+              </div>
+            </div>
           <br>
           <div class="row">
             <div class="large-6 columns center">
