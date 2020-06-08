@@ -21,6 +21,7 @@
 # - Dimitrios Christidis <dimitrios.christidis@cern.ch>, 2019
 # - Andrew Lister <andrew.lister@stfc.ac.uk>, 2019
 # - Brandon White <bjwhite@fnal.gov>, 2019-2020
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 #
 # PY3K COMPATIBLE
 
@@ -141,7 +142,6 @@ def reaper(rses, worker_number=0, child_number=0, total_children=1, chunk_size=1
     :param once: If True, only runs one iteration of the main loop.
     :param greedy: If True, delete right away replicas with tombstone.
     :param scheme: Force the reaper to use a particular protocol, e.g., mock.
-    :param exclude_rses: RSE expression to exclude RSEs from the Reaper.
     """
     logging.info('Starting Reaper: Worker %(worker_number)s, '
                  'child %(child_number)s will work on RSEs: ' % locals() + ', '.join([rse['rse'] for rse in rses]))
