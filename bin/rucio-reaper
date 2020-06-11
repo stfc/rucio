@@ -17,6 +17,7 @@
 # - Vincent Garonne <vgaronne@gmail.com>, 2012-2018
 # - Wen Guan <wguan.icedew@gmail.com>, 2014
 # - Mario Lassnig <mario.lassnig@cern.ch>, 2019
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 
 """
 Reaper is a daemon to manage file deletion
@@ -69,6 +70,7 @@ Check if the replica exists::
     parser.add_argument('--exclude-rses', action="store", default=None, type=str, help='RSEs expression to exclude RSEs')
     parser.add_argument('--include-rses', action="store", default=None, type=str, help='RSEs expression to include RSEs')
     parser.add_argument('--rses', nargs='+', type=str, help='List of RSEs')
+    parser.add_argument('--vos', nargs='+', type=str, help='Optional list of VOs to consider. Only used in multi-VO mode.')
     parser.add_argument('--delay-seconds', action="store", default=3600, type=int, help='Delay to retry failed deletion')
     return parser
 
@@ -80,6 +82,6 @@ if __name__ == '__main__':
     try:
         run(total_workers=args.total_workers, chunk_size=args.chunk_size, greedy=args.greedy,
             once=args.run_once, scheme=args.scheme, rses=args.rses, threads_per_worker=args.threads_per_worker,
-            exclude_rses=args.exclude_rses, include_rses=args.include_rses, delay_seconds=args.delay_seconds)
+            exclude_rses=args.exclude_rses, include_rses=args.include_rses, vos=args.vos, delay_seconds=args.delay_seconds)
     except KeyboardInterrupt:
         stop()

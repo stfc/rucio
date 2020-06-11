@@ -16,6 +16,7 @@
 # - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 # - Eli Chadwick <eli.chadwick@stfc.ac.uk>, 2020
 
+from datetime import datetime
 from json import dumps
 from logging import getLogger
 from nose.tools import assert_equal, assert_false, assert_in, assert_is_not_none, assert_not_equal, assert_not_in, assert_raises, assert_true
@@ -31,7 +32,7 @@ from rucio.api.authentication import get_auth_token_gss, get_auth_token_saml, ge
 from rucio.api.did import add_did, list_dids
 from rucio.api.identity import add_account_identity, list_accounts_for_identity
 from rucio.api.replica import list_replicas
-from rucio.api.rse import add_protocol, add_rse, add_rse_attribute, list_rses
+from rucio.api.rse import add_protocol, add_rse, add_rse_attribute, list_rses, set_rse_limits, set_rse_usage
 from rucio.api.rule import delete_replication_rule, get_replication_rule
 from rucio.api.scope import add_scope, list_scopes
 from rucio.api.subscription import add_subscription, list_subscriptions
@@ -44,15 +45,17 @@ from rucio.client.replicaclient import ReplicaClient
 from rucio.client.scopeclient import ScopeClient
 from rucio.client.subscriptionclient import SubscriptionClient
 from rucio.client.uploadclient import UploadClient
-from rucio.common.config import config_get_bool, config_remove_option, config_set
+from rucio.common.config import config_get, config_get_bool, config_remove_option, config_set
 from rucio.common.exception import AccessDenied, Duplicate, InputValidationError, UnsupportedAccountName, UnsupportedOperation
 from rucio.common.types import InternalAccount, InternalScope
 from rucio.common.utils import generate_uuid, parse_response, ssh_sign
 from rucio.core.account_counter import increase, update_account_counter
 from rucio.core.rse import get_rses_with_attribute_value, get_rse_id, get_rse_vo
+from rucio.core.replica import add_replica
 from rucio.core.rule import add_rule
 from rucio.core.vo import add_vo, vo_exists
 from rucio.daemons.automatix.automatix import automatix
+from rucio.daemons.reaper.reaper import run as run_reaper
 from rucio.db.sqla import models, session as db_session
 from rucio.tests.test_authentication import PRIVATE_KEY, PUBLIC_KEY
 from rucio.web.rest.account import APP as account_app
@@ -952,3 +955,84 @@ class TestMultiVODaemons(object):
         replicas_new = list(list_replicas(did_dicts, rse_expression=shr_rse, **self.new_vo))
         assert_not_equal(len(replicas_tst), 0)
         assert_equal(len(replicas_new), 0)
+
+    def test_reaper(self):
+        """ MULTI VO (DAEMON): Test that reaper runs on the specified VO(s) """
+        rse_str = ''.join(choice(ascii_uppercase) for x in range(10))
+        rse_name = 'SHR_%s' % rse_str
+        rse_id_tst = add_rse(rse_name, 'root', **self.vo)
+        rse_id_new = add_rse(rse_name, 'root', **self.new_vo)
+
+        mock_protocol = {'scheme': 'MOCK',
+                         'hostname': 'localhost',
+                         'port': 123,
+                         'prefix': '/test/reaper',
+                         'impl': 'rucio.rse.protocols.mock.Default',
+                         'domains': {
+                             'lan': {'read': 1,
+                                     'write': 1,
+                                     'delete': 1},
+                             'wan': {'read': 1,
+                                     'write': 1,
+                                     'delete': 1}}}
+        add_protocol(rse=rse_name, data=mock_protocol, issuer='root', **self.vo)
+        add_protocol(rse=rse_name, data=mock_protocol, issuer='root', **self.new_vo)
+
+        scope_uuid = str(generate_uuid()).lower()[:16]
+        scope_name = 'shr_%s' % scope_uuid
+        scope_tst = InternalScope(scope_name, **self.vo)
+        scope_new = InternalScope(scope_name, **self.new_vo)
+        add_scope(scope_name, 'root', 'root', **self.vo)
+        add_scope(scope_name, 'root', 'root', **self.new_vo)
+
+        nb_files = 30
+        file_size = 2147483648  # 2G
+
+        names = []
+        for i in range(nb_files):
+            name = 'lfn%s' % generate_uuid()
+            names.append(name)
+            add_replica(rse_id=rse_id_tst, scope=scope_tst, name=name, bytes=file_size, account=InternalAccount('root', **self.vo),
+                        adler32=None, md5=None, tombstone=datetime.utcnow())
+            add_replica(rse_id=rse_id_new, scope=scope_new, name=name, bytes=file_size, account=InternalAccount('root', **self.new_vo),
+                        adler32=None, md5=None, tombstone=datetime.utcnow())
+
+        set_rse_usage(rse=rse_name, source='storage', used=nb_files * file_size, free=800, issuer='root', **self.vo)
+        set_rse_limits(rse=rse_name, name='MinFreeSpace', value=10737418240, issuer='root', **self.vo)
+        set_rse_limits(rse=rse_name, name='MaxBeingDeletedFiles', value=10, issuer='root', **self.vo)
+
+        set_rse_usage(rse=rse_name, source='storage', used=nb_files * file_size, free=800, issuer='root', **self.new_vo)
+        set_rse_limits(rse=rse_name, name='MinFreeSpace', value=10737418240, issuer='root', **self.new_vo)
+        set_rse_limits(rse=rse_name, name='MaxBeingDeletedFiles', value=10, issuer='root', **self.new_vo)
+
+        # Check we start of with the expected number of replicas
+        assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.vo))), nb_files)
+        assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.new_vo))), nb_files)
+
+        # Check by default we only run on our VO
+        run_reaper(once=True, rses=[rse_name])
+        assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.vo))), nb_files - 5)
+        assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.new_vo))), nb_files)
+
+        # Check we cannot reap on another VO even if it's provided
+        run_reaper(once=True, rses=[rse_name], vos=['tst', 'new'])
+        assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.vo))), nb_files - 10)
+        assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.new_vo))), nb_files)
+
+        try:
+            current_vo = config_get('client', 'vo', raise_exception=False, default=None)
+            config_set('client', 'vo', 'def')
+
+            # Check when at 'def' we run on all VOs by default
+            run_reaper(once=True, rses=[rse_name])
+            assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.vo))), nb_files - 15)
+            assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.new_vo))), nb_files - 5)
+
+            # Check when at 'def' we can single out VOs to reap
+            run_reaper(once=True, rses=[rse_name], vos=['new'])
+            assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.vo))), nb_files - 15)
+            assert_equal(len(list(list_replicas([{'scope': scope_name, 'name': n} for n in names], rse_expression=rse_name, **self.new_vo))), nb_files - 10)
+
+        finally:
+            # Make sure we don't leave the config changed due to a test failure
+            config_set('client', 'vo', current_vo)
