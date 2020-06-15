@@ -1030,7 +1030,7 @@ class TestMultiVOBinRucio():
     @classmethod
     def setUpClass(cls):
         if config_get_bool('common', 'multi_vo', raise_exception=False, default=False):
-            cls.vo = {'vo': 'tst'}
+            cls.vo = {'vo': config_get('client', 'vo', raise_exception=False, default='tst')}
             cls.new_vo = {'vo': 'new'}
             cls.fake_vo = {'vo': 'fke'}
             if not vo_exists(**cls.new_vo):
