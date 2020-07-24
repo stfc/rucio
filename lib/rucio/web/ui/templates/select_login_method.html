@@ -1,4 +1,4 @@
-$def with (oidc_issuers, saml_support, multi_vo, buttons = ["btn btn-block btn-outline-warning btn-lg", "btn btn-block btn-outline-info btn-lg", "btn btn-block btn-outline-danger btn-lg"], original_buttons = ["btn btn-block btn-outline-warning btn-lg", "btn btn-block btn-outline-info btn-lg", "btn btn-block btn-outline-danger btn-lg"])
+$def with (oidc_issuers, saml_support, possible_vos, buttons = ["btn btn-block btn-outline-warning btn-lg", "btn btn-block btn-outline-info btn-lg", "btn btn-block btn-outline-danger btn-lg"], original_buttons = ["btn btn-block btn-outline-warning btn-lg", "btn btn-block btn-outline-info btn-lg", "btn btn-block btn-outline-danger btn-lg"])
 <!--
  Copyright European Organization for Nuclear Research (CERN)
 
@@ -9,6 +9,7 @@ $def with (oidc_issuers, saml_support, multi_vo, buttons = ["btn btn-block btn-o
 
  Authors:
  - Jaroslav Guenther, <jaroslav.guenther@gmail.com>, 2019-2020
+ - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 -->
 
 
@@ -56,18 +57,25 @@ $def with (oidc_issuers, saml_support, multi_vo, buttons = ["btn btn-block btn-o
   </p>
   <form>
   <div class="form-group">
-    <div class="input-group" style="$('' if multi_vo else 'display: none;')">
+    <div class="input-group">
       <div class="input-group-prepend">
-          <span class="input-group-text" style="width: 2.75em"> <i class="fa fa-desktop"></i> </span>
-        </div>
-        <input name="voname" class="form-control" placeholder="Specify Rucio VO ..." type="voname" id="voname" value="">
-    </div> <!-- input-group.// -->
-  <div class="input-group">
-    <div class="input-group-prepend">
         <span class="input-group-text" style="width: 2.75em"> <i class="fa fa-user"></i> </span>
-     </div>
-    <input name="accountname" class="form-control" placeholder="Optionally specify Rucio account name ..." type="accountname" id="accountname" value="">
-  </div> <!-- input-group.// -->
+      </div>
+      <input name="accountname" class="form-control" placeholder="Optionally specify Rucio account name ..." type="accountname" id="accountname" value="">
+    </div> <!-- input-group.// -->
+    $if possible_vos:
+        <div class="input-group">
+          <label style="color:red; line-height:21pt; text-align: center;">Unable to login, multiple VOs found for given identity. Please select a VO and try again:</label>
+          <div class="input-group-prepend">
+            <span class="input-group-text" style="width: 2.75em"> <i class="fa fa-desktop"></i> </span>
+          </div>
+          <select name="voname" class="form-control" type="voname" id="voname">
+          <option selected></option>
+          $for possible_vo in possible_vos:
+              <option value=$possible_vo[0]>$possible_vo[1] - $possible_vo[0]</option>
+        </div> <!-- input-group.// -->
+    $else:
+        <input type="hidden" name="voname" id="voname"/>
   </div> <!-- form-group// -->
   </form>
 </article>

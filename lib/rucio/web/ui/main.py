@@ -23,6 +23,7 @@
 # - Stefan Prenner <stefan.prenner@cern.ch>, 2018
 # - Hannes Hansen <hannes.jakob.hansen@cern.ch>, 2019
 # - Ruturaj Gujar <ruturaj.gujar23@gmail.com>, 2019
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 #
 # PY3K COMPATIBLE
 
@@ -84,7 +85,6 @@ COMMON_URLS = (
 )
 
 POLICY = config_get('policy', 'permission')
-MULTI_VO = config_get('common', 'multi_vo', default=False)
 
 ATLAS_URLS = ()
 OTHER_URLS = ()
@@ -192,7 +192,7 @@ class Auth(object):
                 raise generate_http_error(401, 'CannotAuthenticate', 'Cannot get token')
         else:
             render = template.render(join(dirname(__file__), 'templates/'))
-            return render.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, MULTI_VO)
+            return render.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, None)
 
 
 class X509(object):
@@ -209,7 +209,13 @@ class OIDC(object):
         """ GET """
         data = param_input()
         try:
-            return oidc_auth(data.account, data.issuer)
+            if not MULTI_VO:
+                ui_vo = 'def'
+            elif hasattr(data, 'vo') and data.vo:
+                ui_vo = data.vo
+            else:
+                ui_vo = None
+            return oidc_auth(data.account, data.issuer, ui_vo)
         except:
             raise generate_http_error(401, 'CannotAuthenticate', 'Cannot get token OIDC auth url from the server.')
 
@@ -359,7 +365,7 @@ class Login(object):
             vo = data.vo
         else:
             vo = None
-        return render.login(account, vo, MULTI_VO)
+        return render.login(account, vo, None)
 
     def POST(self):
         """ POST """

@@ -10,6 +10,7 @@
 # - Ruturaj Gujar, <ruturaj.gujar23@gmail.com>, 2019
 # - Jaroslav Guenther, <jaroslav.guenther@cern.ch>, 2019-2020
 # - Eli Chadwick, <eli.chadwick@stfc.ac.uk>, 2020
+# - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 #
 # TO-DO !!! Remove passing data with account and other params to the functions
 # catch these from the webpy input() storage object
@@ -22,9 +23,10 @@ from web import cookies, ctx, input, setcookie, template, seeother
 
 from rucio import version
 from rucio.api import authentication as auth, identity
-from rucio.api.account import get_account_info, list_account_attributes
+from rucio.api.account import account_exists, get_account_info, list_account_attributes
 from rucio.common.config import config_get
-from rucio.db.sqla.constants import AccountType
+from rucio.core import identity as identity_core, vo as vo_core
+from rucio.db.sqla.constants import AccountType, IdentityType
 
 try:
     from onelogin.saml2.auth import OneLogin_Saml2_Auth
@@ -110,17 +112,32 @@ def __to_js(var, value):
     return '<script type="text/javascript">var %s = "%s";</script>' % (var, value)
 
 
-def select_account_name(identitystr, identity_type, vo='def'):
+def select_account_name(identitystr, identity_type, vo=None):
     """
-    Looks for account corresponding to the provided identity.
+    Looks for account (and VO if not known) corresponding to the provided identity.
     :param identitystr: identity string
     :param identity_type: identity_type e.g. x509, saml, oidc, userpass
-    :returns: None or account string
+    :returns: Tuple of None or account string, None or VO string or list of VO strings
     """
-    accounts = identity.list_accounts_for_identity(identitystr, identity_type)
     ui_account = None
+    if not MULTI_VO:
+        vo = 'def'
+    if vo is not None:
+        accounts = identity.list_accounts_for_identity(identitystr, identity_type)
+    else:
+        internal_accounts = identity_core.list_accounts_for_identity(identitystr, IdentityType.from_sym(identity_type))
+        accounts = [account.external for account in internal_accounts]
+        vos = [account.vo for account in internal_accounts]
+        if vos:
+            vos = list(set(vos))
+            # If we only have 1 VO that matches the identity use that, otherwise return all possible VOs so the user can choose
+            if len(vos) == 1:
+                vo = vos[0]
+            else:
+                return None, vos
+
     if len(accounts) == 0:
-        return None
+        return None, vo
     # check if ui_account param is set
     if 'ui_account' in input():
         ui_account = input()['ui_account']
@@ -129,9 +146,9 @@ def select_account_name(identitystr, identity_type, vo='def'):
         ui_account = input()['account']
     if ui_account:
         if ui_account not in accounts:
-            return None
+            return None, vo
         else:
-            return ui_account
+            return ui_account, vo
     else:
         # try to set the default account to the user account, if not available take the first account.
         def_account = accounts[0]
@@ -144,7 +161,7 @@ def select_account_name(identitystr, identity_type, vo='def'):
         if (selected_account):
             def_account = selected_account
         ui_account = def_account
-    return ui_account
+    return ui_account, vo
 
 
 def get_token(token_method, acc=None, vo=None, idt=None, pwd=None):
@@ -243,6 +260,20 @@ def finalize_auth(token, identity_type, cookie_dict_extra=None):
         return RENDERER.problem("It was not possible to validate and finalize your login with the provided token.")
 
 
+def get_vo_descriptions(vos):
+    """
+    Gets the description for each VO in the list.
+    :param vos: List of 3 character VO strings
+    :returns: List of tuples containing VO string, VO description
+    """
+    all_vos = vo_core.list_vos()
+    vos_with_desc = []
+    for vo in all_vos:
+        if vo['vo'] in vos:
+            vos_with_desc.append((vo['vo'], vo['description']))
+    return vos_with_desc
+
+
 # AUTH_TYPE SPECIFIC METHODS FOLLOW:
 
 
@@ -258,14 +289,41 @@ def x509token_auth(data=None):
     dn = ctx.env.get('SSL_CLIENT_S_DN')
     if not dn.startswith('/'):
         dn = '/%s' % '/'.join(dn.split(',')[::-1])
-    if hasattr(data, 'vo') and data.vo:
+    if not MULTI_VO:
+        ui_vo = 'def'
+    elif hasattr(data, 'vo') and data.vo:
         ui_vo = data.vo
     else:
-        ui_vo = 'def'
+        ui_vo = None
     if hasattr(data, 'account') and data.account:
         ui_account = data.account
     else:
-        ui_account = select_account_name(dn, 'x509', ui_vo)
+        ui_account = None
+
+    if ui_account is None and ui_vo is None:
+        ui_account, ui_vo = select_account_name(dn, 'x509', ui_vo)
+    elif ui_account is None:
+        ui_account, _ = select_account_name(dn, 'x509', ui_vo)
+    elif ui_vo is None:
+        _, ui_vo = select_account_name(dn, 'x509', ui_vo)
+
+    # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+    if type(ui_vo) is list:
+        if ui_account:
+            valid_vos = []
+            for vo in ui_vo:
+                if account_exists(ui_account, vo):
+                    valid_vos.append(vo)
+            if len(valid_vos) == 0:
+                return RENDERER.problem(('<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account: %s at any VO.' % (dn, ui_account)))
+            elif len(valid_vos) == 1:
+                ui_vo = valid_vos[0]
+            else:
+                vos_with_desc = get_vo_descriptions(valid_vos)
+                return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+        else:
+            vos_with_desc = get_vo_descriptions(ui_vo)
+            return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
 
     if MULTI_VO:
         msg = "<br><br>Your certificate (%s) is not mapped to (possibly any) rucio account: %s at VO: %s." % (dn, ui_account, ui_vo)
@@ -294,14 +352,43 @@ def userpass_auth(data, rendered_tpl):
         # if user tries to access a page through URL without logging in, then redirect to login page.
         if rendered_tpl:
             return RENDERER.login(None)
-        if hasattr(data, 'vo') and data.vo:
+        if not MULTI_VO:
+            ui_vo = 'def'
+        elif hasattr(data, 'vo') and data.vo:
             ui_vo = data.vo
         else:
-            ui_vo = 'def'
+            ui_vo = None
         if hasattr(data, 'account') and data.account:
             ui_account = data.account
         else:
-            ui_account = select_account_name(data.username, 'userpass')
+            ui_account = None
+            
+        if ui_account is None and ui_vo is None:
+            ui_account, ui_vo = select_account_name(data.username, 'userpass', ui_vo)
+        elif ui_account is None:
+            ui_account, _ = select_account_name(data.username, 'userpass', ui_vo)
+        elif ui_vo is None:
+            _, ui_vo = select_account_name(data.username, 'userpass', ui_vo)
+
+        # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+        if type(ui_vo) is list:
+            if ui_account:
+                valid_vos = []
+                for vo in ui_vo:
+                    if account_exists(ui_account, vo):
+                        valid_vos.append(vo)
+
+                if len(valid_vos) == 0:
+                    return RENDERER.problem(('Cannot find any Rucio account %s associated with identity %s at any VO.' % (ui_account, data.username)))
+                elif len(valid_vos) == 1:
+                    ui_vo = valid_vos[0]
+                else:
+                    vos_with_desc = get_vo_descriptions(valid_vos)
+                    return RENDERER.login(ui_account, None, vos_with_desc)
+            else:
+                vos_with_desc = get_vo_descriptions(ui_vo)
+                return RENDERER.login(None, None, vos_with_desc)
+
         if not ui_account:
             if MULTI_VO:
                 return RENDERER.problem(('Cannot get find any account associated with %s identity at VO %s.' % (data.username, ui_vo)))
@@ -329,21 +416,48 @@ def saml_auth(method, data=None):
     req = prepare_webpy_request(ctx.env, dict(input()))
     samlauth = OneLogin_Saml2_Auth(req, custom_base_path=SAML_PATH)
     saml_user_data = cookies().get('saml-user-data')
-    if hasattr(data, 'vo') and data.vo:
+    if not MULTI_VO:
+        ui_vo = 'def'
+    elif hasattr(data, 'vo') and data.vo:
         ui_vo = data.vo
     else:
-        ui_vo = 'def'
-    ui_account = None
+        ui_vo = None
     if hasattr(data, 'account') and data.account:
         ui_account = data.account
+    else:
+        ui_account = None
+
     if method == "GET":
         # If user data is not present, redirect to IdP for authentication
         if not saml_user_data:
             return seeother(samlauth.login())
         # If user data is present but token is not valid, create a new one
         saml_nameid = cookies().get('saml-nameid')
-        if not ui_account:
-            ui_account = select_account_name(saml_nameid, 'saml', vo=ui_vo)
+        if ui_account is None and ui_vo is None:
+            ui_account, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+        elif ui_account is None:
+            ui_account, _ = select_account_name(saml_nameid, 'saml', ui_vo)
+        elif ui_vo is None:
+            _, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+
+        # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+        if type(ui_vo) is list:
+            if ui_account:
+                valid_vos = []
+                for vo in ui_vo:
+                    if account_exists(ui_account, vo):
+                        valid_vos.append(vo)
+                if len(valid_vos) == 0:
+                    return RENDERER.problem(('Cannot find any Rucio account %s associated with identity %s at any VO.' % (ui_account, saml_nameid)))
+                elif len(valid_vos) == 1:
+                    ui_vo = valid_vos[0]
+                else:
+                    vos_with_desc = get_vo_descriptions(valid_vos)
+                    return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+            else:
+                vos_with_desc = get_vo_descriptions(ui_vo)
+                return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
         if not ui_account:
             if MULTI_VO:
                 return RENDERER.problem('Cannot get find any account associated with %s identity at VO %s.' % (saml_nameid, ui_vo))
@@ -368,8 +482,31 @@ def saml_auth(method, data=None):
             cookie_extra['saml-session-index'] = samlauth.get_session_index()
             # WHY THIS ATTEMPTS TO GET A NEW TOKEN ?
             # WE SHOULD HAVE IT/GET IT FROM COOKIE OR DB AND JUST REDIRECT, NO ?
-            if not ui_account:
-                ui_account = select_account_name(saml_nameid, 'saml', vo=ui_vo)
+            if ui_account is None and ui_vo is None:
+                ui_account, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+            elif ui_account is None:
+                ui_account, _ = select_account_name(saml_nameid, 'saml', ui_vo)
+            elif ui_vo is None:
+                _, ui_vo = select_account_name(saml_nameid, 'saml', ui_vo)
+
+            # Try to eliminate VOs based on the account name (if we have one), if we still have multiple options let the user select one
+            if type(ui_vo) is list:
+                if ui_account:
+                    valid_vos = []
+                    for vo in ui_vo:
+                        if account_exists(ui_account, vo):
+                            valid_vos.append(vo)
+                    if len(valid_vos) == 0:
+                        return RENDERER.problem(('Cannot find any Rucio account %s associated with identity %s at any VO.' % (ui_account, saml_nameid)))
+                    elif len(valid_vos) == 1:
+                        ui_vo = valid_vos[0]
+                    else:
+                        vos_with_desc = get_vo_descriptions(valid_vos)
+                        return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+                else:
+                    vos_with_desc = get_vo_descriptions(ui_vo)
+                    return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
             if not ui_account:
                 if MULTI_VO:
                     return RENDERER.problem('Cannot get find any account associated with %s identity at VO %s.' % (saml_nameid, ui_vo))
@@ -388,16 +525,30 @@ def saml_auth(method, data=None):
     return RENDERER.problem("Error while processing SAML")
 
 
-def oidc_auth(account, issuer):
+def oidc_auth(account, issuer, ui_vo):
     """
     Open ID Connect Login
     :param account: Rucio account string
     :param issuer: issuer key (e.g. xdc, wlcg) as in the idpsecrets.json file
+    :param ui_vo: 3 character string to identify the VO, if None will attempt to deduce it from `account`
     :returns: rendered final page or a page with error message
     """
-
     if not account:
         account = 'webui'
+    if ui_vo is None:
+        all_vos = [vo['vo'] for vo in vo_core.list_vos()]
+        valid_vos = []
+        for vo in all_vos:
+            if account_exists(ui_account, vo):
+                valid_vos.append(vo)
+        if len(valid_vos) == 0:
+            return RENDERER.problem(('Cannot find any Rucio account %s at any VO.' % ui_account))
+        elif len(valid_vos) == 1:
+            ui_vo = valid_vos[0]
+        else:
+            vos_with_desc = get_vo_descriptions(valid_vos)
+            return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, vos_with_desc)
+
     if not issuer:
         return RENDERER.problem("Please provide IdP issuer.")
     kwargs = {'audience': None,
@@ -408,7 +559,7 @@ def oidc_auth(account, issuer):
               'refresh_lifetime': None,
               'ip': None,
               'webhome': ctx.realhome + '/oidc_final'}
-    auth_url = auth.get_auth_oidc(account, **kwargs)
+    auth_url = auth.get_auth_oidc(account, vo=ui_vo, **kwargs)
     if not auth_url:
         return RENDERER.problem("It was not possible to get the OIDC authentication url from the Rucio auth server. "
                                 + "In case you provided your account name, make sure it is known to Rucio.")   # NOQA: W503
@@ -431,7 +582,7 @@ def authenticate(rendered_tpl):
 
     # login without any known server config
     if not AUTH_TYPE:
-        return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, MULTI_VO)
+        return RENDERER.select_login_method(AUTH_ISSUERS, SAML_SUPPORT, None)
     # for AUTH_TYPE predefined by the server continue
     else:
         if AUTH_TYPE == 'userpass':

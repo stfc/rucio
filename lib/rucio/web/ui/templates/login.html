@@ -1,4 +1,4 @@
-$def with (account, vo, multi_vo)
+$def with (account, vo, possible_vos)
 <!--
  Copyright European Organization for Nuclear Research (CERN)
 
@@ -14,6 +14,7 @@ $def with (account, vo, multi_vo)
  - Cedric Serfon, <cedric.serfon@cern.ch>, 2015-2019
  - Vincent Garonne, <vincent.garonne@cern.ch>, 2015
  - Ruturaj Gujar, <ruturaj.gujar23@gmail.com>, 2019
+ - Patrick Austin <patrick.austin@stfc.ac.uk>, 2020
 -->
 
 <!DOCTYPE html>
@@ -86,38 +87,38 @@ $def with (account, vo, multi_vo)
           <div class="row">
             <div class="large-6 columns center">
               <label>Password
-                <input type="password" name="password" placeholder="Enter password here..." id="password"/ >
+                <input type="password" name="password" placeholder="Enter password here..." id="password"/>
               </label>
             </div>
           </div>
-          $if multi_vo and not vo:
-              <div class="row">
-                <div class="large-6 columns center">
-                  <label>Rucio VO (3 letter name)
-                    <input type="vo" name="vo" placeholder="VO ..." id="vo"/ >
-                  </label>
-                </div>
-              </div>
-          $elif multi_vo:
-            <div class="row">
-              <div class="large-6 columns center">
-                <label>Rucio VO: $vo</label>
-              </div>
-            </div>
           $if not account:
               <div class="row">
                 <div class="large-6 columns center">
                   <label>Rucio account name (optional)
-                    <input type="account" name="account" placeholder="account name ..." id="account"/ >
+                    <input type="text" name="account" placeholder="account name ..." id="account"/>
                   </label>
                 </div>
               </div>
           $else:
-            <div class="row">
-              <div class="large-6 columns center">
-                <label>Rucio account name: $account</label>
+              <div class="row">
+                <div class="large-6 columns center">
+                  <label>Rucio account name: $account</label>
+                  <input type="hidden" name="account" value=$account id="account"/>
+                </div>
               </div>
-            </div>
+          $if possible_vos:
+              <div class="row">
+                <div class="large-6 columns center">
+                  <label style="color:red">Unable to login, multiple VOs found for given identity. Please select a VO and try again:</label>
+                    <select name="vo" id="vo">
+                      <option selected></option>
+                      $for possible_vo in possible_vos:
+                          <option value=$possible_vo[0]>$possible_vo[1] - $possible_vo[0]</option>
+                    </select>
+                </div>
+              </div>
+          $else:
+              <input type="hidden" name="vo" id="vo"/>
           <br>
           <div class="row">
             <div class="large-6 columns center">
