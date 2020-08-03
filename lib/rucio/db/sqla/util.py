@@ -288,7 +288,7 @@ def split_vo(dialect, column, return_vo=False):
             return func.SUBSTR(column, bindparam('int_1'), i - 1)
 
 
-def rename_vo(old_vo, new_vo, insert_new_vo=False, description=None, email=None, commit_changes=False, echo=True):
+def rename_vo(old_vo, new_vo, insert_new_vo=False, description=None, email=None, commit_changes=False, skip_history=False, echo=True):
     """
     Updates rows so that entries associated with `old_vo` are now associated with `new_vo` as part of multi-VO migration.
 
@@ -299,6 +299,7 @@ def rename_vo(old_vo, new_vo, insert_new_vo=False, description=None, email=None,
     :param email:          Admin email for the new VO, unused if `insert_new_vo` is False.
     :param commit_changes: If True then changes are made against the database directly.
                            If False, then nothing is commited and the commands needed are dumped to be run later.
+    :param skip_history:   If True then tables without FKC containing historical data will not be converted to save time.
     """
     success = True
     engine = session.get_engine(echo=echo)
@@ -312,6 +313,8 @@ def rename_vo(old_vo, new_vo, insert_new_vo=False, description=None, email=None,
     all_fks = []
     tables_and_columns = []
     for table_name in inspector.get_table_names():
+        if skip_history and ('_history' in table_name or '_hist_recent' in table_name):
+            continue
         fks = []
         table = Table(table_name, metadata)
         for column in table.c:
@@ -395,13 +398,14 @@ def rename_vo(old_vo, new_vo, insert_new_vo=False, description=None, email=None,
     trans.close()
 
 
-def remove_vo(vo, commit_changes=False, echo=True):
+def remove_vo(vo, commit_changes=False, skip_history=False, echo=True):
     """
     Deletes rows associated with `vo` as part of multi-VO migration.
 
     :param vo:             The 3 character string for the VO being removed from the DB.
     :param commit_changes: If True then changes are made against the database directly.
                            If False, then nothing is commited and the commands needed are dumped to be run later.
+    :param skip_history:   If True then tables without FKC containing historical data will not be converted to save time.
     """
     success = True
     engine = session.get_engine(echo=echo)
@@ -416,6 +420,8 @@ def remove_vo(vo, commit_changes=False, echo=True):
     tables_and_columns = []
     tables_and_columns_rse = []
     for table_name in inspector.get_table_names():
+        if skip_history and ('_history' in table_name or '_hist_recent' in table_name):
+            continue
         fks = []
         table = Table(table_name, metadata)
         for column in table.c:
@@ -491,7 +497,7 @@ def remove_vo(vo, commit_changes=False, echo=True):
     trans.close()
 
 
-def convert_to_mvo(new_vo, description, email, commit_changes=False, echo=True):
+def convert_to_mvo(new_vo, description, email, commit_changes=False, skip_history=False, echo=True):
     """
     Converts a single-VO database to a multi-VO one with the specified VO details.
 
@@ -500,6 +506,7 @@ def convert_to_mvo(new_vo, description, email, commit_changes=False, echo=True):
     :param email:          Admin email for the new VO.
     :param commit_changes: If True then changes are made against the database directly, and a super_root account is created.
                            If False, then nothing is commited and the commands needed are dumped to be run later.
+    :param skip_history:   If True then tables without FKC containing historical data will not be converted to save time.
     """
     if not config_get_bool('common', 'multi_vo', False, False):
         print('Multi-VO mode is not enabled in the config file, aborting conversion.')
@@ -512,13 +519,14 @@ def convert_to_mvo(new_vo, description, email, commit_changes=False, echo=True):
     else:
         insert_new_vo = False
 
-    rename_vo('def', new_vo, insert_new_vo=insert_new_vo, description=description, email=email, commit_changes=commit_changes, echo=echo)
+    rename_vo('def', new_vo, insert_new_vo=insert_new_vo, description=description, email=email,
+              commit_changes=commit_changes, skip_history=skip_history, echo=echo)
     if commit_changes:
         create_root_account()
     s.close()
 
 
-def convert_to_svo(old_vo, delete_vos=False, commit_changes=False, echo=True):
+def convert_to_svo(old_vo, delete_vos=False, commit_changes=False, skip_history=False, echo=True):
     """
     Converts a multi-VO database to a single-VO one by renaming the given VO and (optionally) deleting entries for other VOs and the super_root.
     Intended to be run on a copy of the original database that contains several VOs.
@@ -527,17 +535,18 @@ def convert_to_svo(old_vo, delete_vos=False, commit_changes=False, echo=True):
     :param delete_vos:     If True then all entries associated with a VO other than `old_vo` will be deleted.
     :param commit_changes: If True then changes are made against the database directly and the old super_root account will be (soft) deleted.
                            If False, then nothing is commited and the commands needed are dumped to be run later.
+    :param skip_history:   If True then tables without FKC containing historical data will not be converted to save time.
     """
     if not config_get_bool('common', 'multi_vo', False, False):
         print('Multi-VO mode is not enabled in the config file, aborting conversion.')
         return
 
-    rename_vo(old_vo, 'def', commit_changes=commit_changes, echo=echo)
+    rename_vo(old_vo, 'def', commit_changes=commit_changes, skip_history=skip_history, echo=echo)
     s = session.get_session()
     if delete_vos:
         for vo in list_vos(session=s):
             if vo['vo'] != 'def':
-                remove_vo(vo['vo'], commit_changes=commit_changes, echo=echo)
+                remove_vo(vo['vo'], commit_changes=commit_changes, skip_history=skip_history, echo=echo)
         if commit_changes:
             del_account(InternalAccount('super_root', vo='def'), session=s)
     s.close()
